@@ -22,10 +22,12 @@
  * always was.
  */
 
-import { realpathSync } from 'node:fs'
+import { lookup } from 'node:dns/promises'
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
+import { isIP } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
-import { vetTarget } from './net.mjs'
+import { blockedAddress, vetTarget } from './net.mjs'
 
 /**
  * Both spellings of every renamed built-in are listed on purpose. The SDK
@@ -207,14 +209,31 @@ const PATH_FIELDS = {
 const SECRET_DIRS = ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.claude', '.config/gh', '.config/gcloud']
 const SECRET_FILES = /^(\.env(\..*)?|\.netrc|\.git-credentials|\.npmrc|\.pypirc|\.claude\.json|id_[a-z0-9]+|.*\.(pem|key|p12|pfx|kdbx))$/i
 
-/** realpath of the deepest part of `p` that exists, with the rest re-attached. */
-function resolveReal(p) {
+/**
+ * realpath of the deepest part of `p` that exists, with the rest re-attached.
+ *
+ * A dangling symlink needs following by hand: realpath fails on it, but a
+ * write through it still lands at its target, so judging the link's own
+ * location would let a Write escape the roots. Null for a link loop.
+ */
+function resolveReal(p, hops = 0) {
   let head = p
   const tail = []
   for (;;) {
     try {
       return resolvePath(realpathSync(head), ...tail.reverse())
     } catch {
+      let link = false
+      try {
+        link = lstatSync(head).isSymbolicLink()
+      } catch {
+        /* nothing there at all */
+      }
+      if (link) {
+        if (hops >= 40) return null
+        const target = resolvePath(dirname(head), readlinkSync(head))
+        return resolveReal(resolvePath(target, ...tail.reverse()), hops + 1)
+      }
       const up = dirname(head)
       if (up === head) return p
       tail.push(basename(head))
@@ -249,12 +268,14 @@ export function pathProblem(target, { cwd, roots }) {
   if (typeof target !== 'string' || !target) return null
   const expanded = target.startsWith('~') ? homedir() + target.slice(1) : target
   const real = resolveReal(resolvePath(cwd, expanded))
+  if (!real) return `${target} cannot be resolved`
   if (!roots.some((root) => inside(root, real))) {
     return `${target} is outside the folders JARVIS may use`
   }
   const home = realpathSync(homedir())
   if (inside(home, real)) {
-    const rel = relative(home, real).split(sep).join('/')
+    // Lower-cased: on a case-insensitive volume ~/.SSH is ~/.ssh.
+    const rel = relative(home, real).split(sep).join('/').toLowerCase()
     if (SECRET_DIRS.some((d) => rel === d || rel.startsWith(d + '/'))) {
       return `${target} holds credentials`
     }
@@ -295,4 +316,31 @@ export function checkToolUse(name, input, { allowWrites = false, cwd, roots }) {
     }
   }
   return { allow: true }
+}
+
+/**
+ * Where a WebFetch hostname actually points, or null if it is public.
+ *
+ * checkToolUse only sees the URL's text, so a public name that resolves to
+ * 127.0.0.1 or a LAN address passes it. This resolves the name and applies the
+ * same address rules as the bridge's own fetches. It cannot pin the address
+ * the CLI then connects to, so a name that rebinds between the two lookups is
+ * still possible; it closes the static case. `resolve` is injectable for tests.
+ */
+export async function fetchTargetProblem(url, resolve = lookup) {
+  let host
+  try {
+    host = vetTarget(url).hostname.replace(/^\[|\]$/g, '')
+  } catch (err) {
+    return err.message
+  }
+  if (isIP(host)) return null // literals were judged by vetTarget
+  let answers
+  try {
+    answers = await resolve(host, { all: true })
+  } catch {
+    return null // unresolvable: the fetch fails on its own
+  }
+  const bad = answers.find((a) => blockedAddress(a.address))
+  return bad ? `${host} resolves to the private address ${bad.address}` : null
 }

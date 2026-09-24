@@ -27,7 +27,13 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import { openRemote, proxyError, vetTarget, PROXY_UA } from './net.mjs'
 import { probeUrl, renderPage } from './page.mjs'
-import { builtinTools, checkToolUse, decideTool as decidePolicy, fileRoots } from './policy.mjs'
+import {
+  builtinTools,
+  checkToolUse,
+  decideTool as decidePolicy,
+  fetchTargetProblem,
+  fileRoots,
+} from './policy.mjs'
 
 const PORT = Number(process.env.JARVIS_BRIDGE_PORT ?? 8787)
 
@@ -197,13 +203,18 @@ const enforcePolicy = async (input) => {
     cwd: WORKSPACE,
     roots: TOOL_ROOTS,
   })
-  if (verdict.allow) return {}
+  let reason = verdict.allow ? null : verdict.reason
+  if (!reason && input.tool_name === 'WebFetch') {
+    const problem = await fetchTargetProblem(input.tool_input?.url)
+    if (problem) reason = `Blocked: that address cannot be fetched (${problem}).`
+  }
+  if (!reason) return {}
   console.log(`[jarvis] tool ${input.tool_name} -> deny (policy)`)
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
-      permissionDecisionReason: verdict.reason,
+      permissionDecisionReason: reason,
     },
   }
 }
