@@ -1247,6 +1247,12 @@ wss.on('connection', (socket) => {
       model: MODEL,
       effort: EFFORT,
       maxTurns: 24,
+      // Run the agent through something else — typically a sandbox wrapper
+      // (bubblewrap, firejail, sandbox-exec) that execs the real CLI with the
+      // arguments it was given. The SDK's bundled CLI is used when unset.
+      ...(process.env.JARVIS_CLAUDE_EXECUTABLE
+        ? { pathToClaudeCodeExecutable: process.env.JARVIS_CLAUDE_EXECUTABLE }
+        : {}),
       permissionMode: 'default',
       // Without this the SDK only emits whole assistant messages, and JARVIS
       // would sit silent until the entire answer was written. Partial events
