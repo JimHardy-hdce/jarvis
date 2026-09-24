@@ -44,7 +44,9 @@ const PORT = Number(process.env.JARVIS_BRIDGE_PORT ?? 8787)
  * and IPv6 loopback is not forwarded between Windows and WSL — a browser on the
  * Windows side would then find nothing listening.
  */
-const HOST = process.env.JARVIS_BRIDGE_HOST ?? '127.0.0.1'
+// Blank counts as unset: listen(PORT, '') binds every interface, which is the
+// one outcome this default exists to prevent.
+const HOST = process.env.JARVIS_BRIDGE_HOST?.trim() || '127.0.0.1'
 
 /**
  * A crash here takes the whole assistant down mid-sentence, and most of what

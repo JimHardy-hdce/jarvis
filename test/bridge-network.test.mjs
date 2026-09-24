@@ -22,16 +22,25 @@ function startBridge(env = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
+  let timer
   const ready = new Promise((resolve, reject) => {
     const onData = (d) => {
       log += d
       const m = /bridge listening on ws:\/\/(\S+):(\d+)/.exec(log)
-      if (m) resolve({ child, port: Number(m[2]), log: () => log })
+      if (m) {
+        clearTimeout(timer)
+        resolve({ child, port: Number(m[2]), host: m[1], log: () => log })
+      }
     }
     child.stdout.on('data', onData)
     child.stderr.on('data', (d) => (log += d))
     child.on('exit', (code) => reject(new Error(`bridge exited ${code}: ${log}`)))
-    setTimeout(() => reject(new Error(`bridge did not start: ${log}`)), 15_000)
+    timer = setTimeout(() => {
+      // Nothing else holds a reference to a bridge that never reported in.
+      child.kill()
+      reject(new Error(`bridge did not start: ${log}`))
+    }, 15_000)
+    child.once('exit', () => clearTimeout(timer))
   })
   return ready
 }
@@ -67,7 +76,12 @@ function tryConnect(host, port) {
 /** Raw WebSocket handshake; resolves the HTTP status line's code. */
 function wsHandshake(port, headers) {
   return new Promise((resolve) => {
-    const s = connect({ host: '127.0.0.1', port })
+    const s = connect({ host: '127.0.0.1', port, timeout: 3000 })
+    // A bridge that accepts and then says nothing must fail the test, not hang it.
+    s.once('timeout', () => {
+      s.destroy()
+      resolve('timeout')
+    })
     s.once('connect', () => {
       const lines = [
         'GET / HTTP/1.1',
@@ -110,6 +124,17 @@ test('is not reachable on any non-loopback interface', async () => {
       'connected',
       `bridge accepted a connection on ${address}`,
     )
+  }
+})
+
+test('a blank JARVIS_BRIDGE_HOST still means loopback', async () => {
+  for (const blank of ['', '   ']) {
+    const b = await startBridge({ JARVIS_BRIDGE_HOST: blank })
+    try {
+      assert.equal(b.host, '127.0.0.1', `JARVIS_BRIDGE_HOST=${JSON.stringify(blank)}`)
+    } finally {
+      b.child.kill()
+    }
   }
 })
 
