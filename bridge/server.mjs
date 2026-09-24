@@ -173,7 +173,42 @@ function configuredServers() {
   }
 }
 
-const MCP_SERVERS = configuredServers()
+/**
+ * Which of those JARVIS actually gets.
+ *
+ * Every server in your Claude Code config is a server a voice agent that reads
+ * the open web can be talked into calling, so "all of them" is a poor default
+ * for anyone whose config has grown. JARVIS_MCP_SERVERS names the ones to hand
+ * over, comma separated; unset keeps the old behaviour of passing everything
+ * configured, and an empty value passes none.
+ */
+function allowedServers(all, list) {
+  if (list === undefined) return all
+  const wanted = new Set(
+    list
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
+  return Object.fromEntries(Object.entries(all).filter(([name]) => wanted.has(name)))
+}
+
+const MCP_SERVERS = allowedServers(configuredServers(), process.env.JARVIS_MCP_SERVERS)
+
+/**
+ * Account connectors — the mail, drive, calendar and other integrations
+ * attached to your claude.ai account — are not in ~/.claude.json and are not
+ * affected by settingSources. The CLI fetches them itself and they join the
+ * session from the second turn on, which is why the HUD's server count jumps
+ * after the first question. Measured on SDK 0.3.220: mail, drive, calendar
+ * and other account connectors all arrived that way, with their read tools
+ * running in read-only mode and their send, share and delete tools one
+ * JARVIS_ALLOW_WRITES away.
+ *
+ * strictMcpConfig limits the session to the servers passed below. Set
+ * JARVIS_ACCOUNT_CONNECTORS=1 to let the account's connectors in as well.
+ */
+const ACCOUNT_CONNECTORS = process.env.JARVIS_ACCOUNT_CONNECTORS === '1'
 
 /** MCP tools arrive as `mcp__<server>__<tool>`. */
 const mcpServerOf = (toolName) =>
@@ -1006,6 +1041,10 @@ console.log(
 )
 console.log(`[jarvis] model ${MODEL} · effort ${EFFORT}`)
 console.log(
+  `[jarvis] MCP servers from config: ${Object.keys(MCP_SERVERS).join(', ') || 'none'}` +
+    (ACCOUNT_CONNECTORS ? ' · account connectors ON' : ' · account connectors off'),
+)
+console.log(
   `[jarvis] writes ${ALLOW_WRITES ? 'ENABLED' : 'disabled'}` +
     (ALLOW_WRITES ? '' : ' — set JARVIS_ALLOW_WRITES=1 to permit shell/file/device actions'),
 )
@@ -1236,6 +1275,7 @@ wss.on('connection', (socket) => {
       // The cost is that MCP servers stop being discovered too, which is why
       // mcpServers above passes them in by hand.
       settingSources: [],
+      strictMcpConfig: !ACCOUNT_CONNECTORS,
       // Stated explicitly, and it has to be.
       //
       // With no `model` here the SDK falls back to its own default, which on
