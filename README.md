@@ -231,6 +231,7 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_ALLOWED_ORIGINS` | local dev | Extra WebSocket origins to accept |
 | `JARVIS_ALLOW_NO_ORIGIN` | off | Accept connections with no `Origin` header |
 | `JARVIS_FILE_ROOTS` | — | Roots the `/file` endpoint may serve from |
+| `JARVIS_KEEP_TRANSCRIPTS` | off | `1` keeps the SDK's session transcripts in `~/.claude/projects` |
 | `JARVIS_VOICE_ID` | — | ElevenLabs voice id |
 | `ELEVENLABS_API_KEY` | — | Optional; enables the ElevenLabs voice + Scribe |
 
